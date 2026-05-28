@@ -5,45 +5,36 @@ const supabase = require("../supabase");
 
 const router = express.Router();
 
-
-const{
-    cleanJson, 
-    safeJsonParse,
-    normalizeSummary,
+const {
+  cleanJson,
+  safeJsonParse,
+  normalizeSummary,
 } = require("../utils/aiFormatter");
-
-
 
 /* -------------------- SUMMARIZE -------------------- */
 router.post("/summarize", auth, async (req, res) => {
-  const { content , documentId} = req.body;
+  const { content, documentId } = req.body;
 
   const prompt = `
 You are an elite study assistant and master of concise explanation. Your job is to transform any content into a summary so clear and insightful that a student feels like they finally *get it* — not just that they've read it.
 
 Follow these principles:
 
-1. **Lead with the core idea.** Open with one sentence that captures the single most important takeaway. If someone reads nothing else, they should walk away with this.
-
-2. **Structure for the brain.** Use short paragraphs or bullets to separate distinct ideas. Never let two unrelated concepts share a sentence. White space is clarity.
-
-3. **Replace jargon with intuition.** When a technical term appears, immediately follow it with a plain-language explanation in parentheses or an analogy. Assume the reader is smart but new to this topic.
-
-4. **Use analogies generously.** Anchor abstract ideas to things people already understand. A good analogy is worth a paragraph of definition.
-
-5. **Highlight what's surprising or counterintuitive.** Students remember what surprises them. If there's a "wait, really?" moment in the content — surface it explicitly.
-
-6. **End with so what.** Close with 1–2 sentences on why this matters or how it connects to a bigger picture. Give the student a reason to care.
-
-Keep summaries concise but never shallow. Dense content deserves depth; simple content deserves brevity. Always match the length to what the content actually requires — no padding, no cutting corners.
+1. Lead with the core idea.
+2. Structure for the brain.
+3. Replace jargon with intuition.
+4. Use analogies generously.
+5. Highlight surprising ideas.
+6. End with why it matters.
 
 TEXT:
 ${content}
 `;
 
   try {
-    const raw = await generateText(prompt);
-    const result = normalizeSummary(raw);
+    const rawSummary = await generateText(prompt);
+
+    const result = normalizeSummary(rawSummary);
 
     const { data, error } = await supabase
       .from("summaries")
@@ -64,36 +55,27 @@ ${content}
       saved: data,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
   }
-
 });
 
 /* -------------------- FLASHCARDS -------------------- */
 router.post("/flashcards", auth, async (req, res) => {
-  const { content , documentId} = req.body;
+  const { content, documentId } = req.body;
 
   const prompt = `
-You are a world-class educator and spaced-repetition expert who designs flashcards used by medical students, bar exam takers, and language learners to pass high-stakes tests.
+You are a world-class educator and spaced-repetition expert.
 
-Your flashcards are legendary because you follow these rules without exception:
-
-**Card Design Rules:**
-1. **One idea per card. Always.**
-2. **Questions must be surgical.**
-3. **Answers must be the minimum viable truth.**
-4. **Write questions forward AND backward when it matters.**
-5. **Surface the why, not just the what.**
-6. **Flag tricky cards.**
-
-Return ONLY a valid JSON array. No markdown, no explanation, no wrapper text.
+Return ONLY a valid JSON array.
 
 Format:
 [
   {
     "question": "...",
     "answer": "...",
-    "hint": "optional one-word memory hook or mnemonic"
+    "hint": "..."
   }
 ]
 
@@ -102,16 +84,17 @@ ${content}
 `;
 
   try {
-    const raw = await generateText(prompt);
+    const rawFlashcards = await generateText(prompt);
 
     const flashcards =
-        safeJsonParse(raw) || cleanJson(raw);
+      safeJsonParse(rawFlashcards) ||
+      cleanJson(rawFlashcards);
 
     const { data, error } = await supabase
       .from("flashcards")
       .insert([
         {
-            document_id: documentId,
+          document_id: documentId,
           cards: flashcards,
         },
       ])
@@ -122,29 +105,26 @@ ${content}
     }
 
     res.json({
-      flashcards: flashcards,
+      flashcards,
       saved: data,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
+
 /* -------------------- QUIZ -------------------- */
 router.post("/quiz", auth, async (req, res) => {
-  const { content , documentId} = req.body;
+  const { content, documentId } = req.body;
 
   const prompt = `
-You are a psychometrician — a specialist in designing tests that accurately measure understanding, not just memorization.
+You are a psychometrician.
 
-**Question Design Rules:**
-1. Test understanding, not recall.
-2. Every wrong answer must be plausible.
-3. Never repeat wording in correct answer.
-4. Vary difficulty (30% easy, 50% medium, 20% hard).
-5. Explain correct answer.
-6. 4 options per question (A, B, C, D).
+Create a multiple choice quiz.
 
-Return ONLY a valid JSON array. No markdown, no explanation, no wrapper text.
+Return ONLY a valid JSON array.
 
 Format:
 [
@@ -166,10 +146,11 @@ ${content}
 `;
 
   try {
-    const raw = await generateText(prompt);
+    const rawQuiz = await generateText(prompt);
 
     const quiz =
-        safeJsonParse(raw) || cleanJson(raw);
+      safeJsonParse(rawQuiz) ||
+      cleanJson(rawQuiz);
 
     const { data, error } = await supabase
       .from("quizzes")
@@ -186,11 +167,165 @@ ${content}
     }
 
     res.json({
-      quiz: quiz,
+      quiz,
       saved: data,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+/* -------------------- STUDY WORKFLOW -------------------- */
+router.post("/study/:documentId", auth, async (req, res) => {
+  const { documentId } = req.params;
+
+  try {
+    /* ---------------- GET DOCUMENT ---------------- */
+
+    const { data: document, error: docError } = await supabase
+      .from("documents")
+      .select("*")
+      .eq("id", documentId)
+      .single();
+
+    if (docError || !document) {
+      return res.status(404).json({
+        error: "Document not found",
+      });
+    }
+
+    const content = document.content;
+
+    /* ---------------- SUMMARY ---------------- */
+
+    const summaryPrompt = `
+Summarize this text clearly for a student.
+
+TEXT:
+${content}
+`;
+
+    const rawSummary = await generateText(summaryPrompt);
+
+    const summary = normalizeSummary(rawSummary);
+
+    const { data: savedSummary, error: summaryError } =
+      await supabase
+        .from("summaries")
+        .insert([
+          {
+            document_id: documentId,
+            content: summary,
+          },
+        ])
+        .select()
+        .single();
+
+    if (summaryError) {
+      return res.status(500).json({
+        error: summaryError.message,
+      });
+    }
+
+    /* ---------------- FLASHCARDS ---------------- */
+
+    const flashPrompt = `
+Create flashcards from this text.
+
+Return ONLY a valid JSON array.
+
+Format:
+[
+  {
+    "question": "...",
+    "answer": "...",
+    "hint": "..."
+  }
+]
+
+TEXT:
+${content}
+`;
+
+    const rawFlashcards = await generateText(flashPrompt);
+
+    const flashcards =
+      safeJsonParse(rawFlashcards) ||
+      cleanJson(rawFlashcards);
+
+    const { data: savedFlashcards, error: flashError } =
+      await supabase
+        .from("flashcards")
+        .insert([
+          {
+            document_id: documentId,
+            cards: flashcards,
+          },
+        ])
+        .select()
+        .single();
+
+    if (flashError) {
+      return res.status(500).json({
+        error: flashError.message,
+      });
+    }
+
+    /* ---------------- QUIZ ---------------- */
+
+    const quizPrompt = `
+Create a multiple choice quiz from this text.
+
+Return ONLY a valid JSON array.
+
+TEXT:
+${content}
+`;
+
+    const rawQuiz = await generateText(quizPrompt);
+
+    const quiz =
+      safeJsonParse(rawQuiz) ||
+      cleanJson(rawQuiz);
+
+    const { data: savedQuiz, error: quizError } =
+      await supabase
+        .from("quizzes")
+        .insert([
+          {
+            document_id: documentId,
+            questions: quiz,
+          },
+        ])
+        .select()
+        .single();
+
+    if (quizError) {
+      return res.status(500).json({
+        error: quizError.message,
+      });
+    }
+
+    /* ---------------- RESPONSE ---------------- */
+
+    res.json({
+      success: true,
+      studyPack: {
+        document,
+        summary: savedSummary,
+        flashcards: savedFlashcards,
+        quiz: savedQuiz,
+      },
+    });
+
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
